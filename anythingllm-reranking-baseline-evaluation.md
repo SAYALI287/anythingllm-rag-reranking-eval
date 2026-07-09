@@ -92,3 +92,39 @@ const finalSystemPrompt = systemPrompt + groundingInstruction;
 
 **Conclusion:** a static, always-on prompt instruction is a partial, blunt-instrument mitigation, not a complete fix. It trades some hallucination risk for a measurable increase in unnecessary hedging on answers the model actually had good grounding for. A more robust follow-up (not implemented in this pass) would condition the grounding instruction — or its strength — on an actual retrieval confidence signal (e.g. the reranker's own relevance/similarity scores from `rerankedSimilarityResponse`) rather than applying it uniformly whenever reranking is simply turned on. This is a natural next iteration rather than a finished solution.
 
+## Follow-up Iteration: Confidence-Based Grounding
+
+Based on the limitation identified above, a second version was implemented: instead of firing the grounding instruction on every reranked response, it now fires only when the reranker's own average relevance score (`avgRerankScore`, computed from the individual `rerank_score` values already produced inside `rerankedSimilarityResponse`) falls below a threshold (initially set to `0.5`).
+
+**Implementation:** `avgRerankScore` is computed at the end of `rerankedSimilarityResponse` in `server/utils/vectorDbProviders/lance/index.js`, threaded through `performSimilaritySearch`'s return value, and checked in `server/utils/chats/stream.js`:
+
+```javascript
+const RERANK_CONFIDENCE_THRESHOLD = 0.5;
+const isLowConfidenceRerank =
+  workspace?.vectorSearchMode === "rerank" &&
+  typeof vectorSearchResults.avgRerankScore === "number" &&
+  vectorSearchResults.avgRerankScore < RERANK_CONFIDENCE_THRESHOLD;
+
+const groundingInstruction = isLowConfidenceRerank
+  ? "\n\nIMPORTANT: The retrieved context for this question had a low average relevance score, meaning it may not fully support a confident answer. If the provided context does not clearly and directly support an answer, explicitly say you are not certain rather than guessing or stating an answer with unwarranted confidence."
+  : "";
+```
+
+### Real observed scores (from live debug logging)
+
+| Question | avgRerankScore | Triggered? | Actual model behavior |
+|---|---|---|---|
+| Where does Shiva come from? | 0.632 | No | Answered without hedging (no hallucination this run) |
+| What is this story about? | 0.0012 | Yes | Hedged correctly ("I am not certain...") |
+| What happened when the storm hit? | 0.0028 | Yes | **Still confidently hallucinated the fabricated boat/storm scene**, despite the instruction being active |
+
+### Two deeper problems this surfaced
+
+**1. The LLM does not reliably follow the grounding instruction even when it is present in the prompt.** On the storm question, the instruction fired (confirmed via debug log) but the model still generated a detailed, unhedged, fabricated account. This indicates that a text-based instruction is not a reliable control mechanism on its own, at least for a small local model (`llama3.2:3b`) — the model can and does ignore it when the retrieved (but irrelevant) context reads as a narratively coherent scene.
+
+**2. The rerank score scale is not obviously trustworthy or comparable across queries.** The "storm" and "story" questions scored near zero (0.001–0.003), while the "Shiva's origin" question scored 0.63 — a gap large enough to suggest the underlying `rerank_score` values from the cross-encoder are not naturally normalized to a clean, comparable 0–1 range (cross-encoders often output raw, unbounded logits rather than calibrated probabilities). This undermines confidence that a single fixed threshold (0.5, chosen without prior calibration) is a meaningful or stable cutoff, and raises the question of whether "average of individual chunk scores" is even the right aggregate statistic to use.
+
+### Honest conclusion on this iteration
+
+The confidence-based approach is conceptually the right direction — targeting the instruction at genuinely weak retrieval rather than applying it blindly — but this implementation is not yet reliable. It did successfully avoid hedging on the one previously-good, high-scoring answer tested here, which is an improvement over the blanket version. However, it did not solve the harder underlying problem: the model's willingness to state a plausible-sounding but ungrounded narrative with full confidence, regardless of whether it was told to be cautious. A more complete solution would likely need either (a) a validated, calibrated confidence score (e.g. via score normalization or a held-out calibration set) rather than a guessed threshold, and/or (b) a mechanism stronger than a prompt instruction — such as filtering out low-relevance chunks entirely before they reach the model, rather than asking the model to self-police its use of them.
+
