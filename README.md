@@ -14,6 +14,10 @@ A hands-on investigation into [AnythingLLM](https://github.com/Mintplex-Labs/any
 
 Most "add RAG re-ranking" tutorials build the feature from scratch. AnythingLLM already had it — fully implemented, benchmarked in a code comment by the original developer, and completely unused by default. That made for a more realistic engineering exercise: read an unfamiliar codebase, find out whether an existing feature actually does what it claims, and fix a real problem it surfaced, rather than build a feature in a vacuum.
 
+![Vector Search Mode setting in AnythingLLM, showing the "Accuracy Optimized" (reranking) option](./screenshots/vector-search-mode-setting.png)
+
+*The reranking toggle as it actually appears in the app — labeled "Search Preference," with a claim ("more accurate and relevant") that this project's evaluation found to be inconsistent in practice.*
+
 ## What I actually did
 
 1. **Environment setup** — ran AnythingLLM via Docker, then switched to running it from source in dev mode (Node.js + Ollama for a fully local, free LLM/embedding stack) to be able to read and edit the real code.
@@ -26,6 +30,20 @@ Most "add RAG re-ranking" tutorials build the feature from scratch. AnythingLLM 
 8. **Documented everything honestly**, including the fix's limitations, rather than only reporting the win.
 
 ## Key finding: speed vs. accuracy vs. confidence is a real, three-way tradeoff
+
+**The hallucination this project found and fixed:**
+
+![Before fix: reranked mode confidently states an incorrect origin for Shiva](./screenshots/before-fix-kashmir-hallucination.png)
+
+*Before the fix: "Shiva comes from Kashmir" — stated with no hedging. External fact-check confirmed this is incorrect (Shiva's tribe is from Mount Kailash, Tibet, per the book and its Wikipedia summary).*
+
+![After fix: the same question now correctly expresses uncertainty](./screenshots/after-fix-honest-uncertainty.png)
+
+*After the fix: the same question, with the grounding instruction active, now correctly expresses uncertainty instead of stating a fabricated answer. Note the second answer on this screen ("What is this story about?") — this is the over-hedging regression the fix introduced on a question it previously answered well.*
+
+![A separate hallucination the fix did not catch](./screenshots/storm-hallucination-uncaught.png)
+
+*A different hallucination (a fabricated storm/boat scene) that the grounding instruction did not catch — shown here stated with full confidence, no hedging. This demonstrates the fix is a partial mitigation, not a general solution.*
 
 | Mode | Speed | Accuracy | Behavior on uncertain questions |
 |---|---|---|---|
